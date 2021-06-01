@@ -1,0 +1,297 @@
+---
+title: "Analysis of Breslow's estimator using exponential distribution"
+author: "Phuong Nguyen"
+date: "2/14/2021"
+output: html_document
+---
+
+### Data description 
+```{r}
+library(interval)
+library(dplyr)
+data = read.csv("wuhan_exported_clean_update.csv", header =T)
+median_age = median(data$Age2, na.rm = T)
+data = data %>% mutate(age_group = ifelse(Age2 > median_age,"old", "young"))
+data$L = data$S - data$E
+data$U = data$S - data$B 
+data$Gender = ifelse(data$Gender == 'M', 1, 0) # Male is encoded as 1 while Female is 0 
+data$age_group =  ifelse(data$age_group == 'old', 1, 0) # old is encoded as 1 while young is 0 
+```
+
+```{r}
+### Initialize output
+n = nrow(data)
+M = 100
+random_uniform = matrix(0,n,M)
+infection_time = matrix(0,n,M)
+gender_coxph_estimator = vector(length = M)
+age_coxph_estimator = vector(length = M)
+age_group_coxph_estimator = vector(length = M)
+gender_coxph_variance = vector(length = M)
+age_coxph_variance = vector(length = M)
+age_group_coxph_variance = vector(length = M)
+matrix_symptom_onset = matrix(data$S, n, M)
+r = log(2)/(2.1) # growth exponent r 
+```
+
+### Find infection time and incubation time. Cox model 
+```{r}
+set.seed(100)
+for(m1 in 1:M){
+  for (n1 in 1:n){
+    # generate uniform distribution 
+    random_uniform[n1,m1] = runif(1,0,1)
+    
+    # find the infection time using the probability integral transform 
+    infection_time[n1,m1] = log((exp(r*min(data$E[n1],data$S[n1])) - exp(r*data$B[n1])) * random_uniform[n1,m1] + exp(r*data$B[n1])) / r
+    matrix_incubation_time = matrix_symptom_onset - infection_time
+    
+    # set matrix_incubation_time as a data frame
+    incubation_time_frame = as.data.frame(matrix_incubation_time)
+    
+    # Create a new data frame, which has all variable from original dataset plus incubation time frame above
+    data_frame_new = data.frame(B = data$B, E = data$E, S = data$S, Delta = data$Delta, Gender = data$Gender,
+                                Age = data$Age2,age_group = data$age_group, incubation_time_frame)
+  }
+}
+
+for (k in 8:length(data_frame_new)) {
+  # Cox model
+  gender_coxph = coxph(Surv(data_frame_new[,k], Delta) ~ Gender, data = data_frame_new, ties = "exact")
+  age_coxph = coxph(Surv(data_frame_new[,k], Delta) ~ Age, data = data_frame_new, ties = "exact")
+  age_group_coxph = coxph(Surv(data_frame_new[,k], Delta) ~ age_group, data = data_frame_new, ties = "exact")
+  
+  # Obtain the estimator of regression coefficent in cox model
+  gender_coxph_estimator[k-7] = gender_coxph$coefficients
+  age_coxph_estimator[k-7] = age_coxph$coefficients
+  age_group_coxph_estimator[k-7] = age_group_coxph$coefficients
+  
+  # Obtain the variance of regression coefficent in cox model
+  gender_coxph_variance[k-7] = gender_coxph$var
+  age_coxph_variance[k-7] = age_coxph$var
+  age_group_coxph_variance[k-7] = age_group_coxph$var
+}
+
+```
+
+### Find the beta coeeffcients, log hazard ratio, variance, p-value and CI of each covariate 
+```{r}
+# Average estimator of the gender coefficients after generating M times 
+average_estimator_gender = sum(gender_coxph_estimator)/M
+average_estimator_gender
+# Hazard ratio of gender 
+hr_gender = exp(average_estimator_gender)
+hr_gender
+
+# Average variance of the gender coefficient after generating M times 
+average_variance_gender = sum(gender_coxph_variance)/M
+
+# Calculate the variance of gender 
+A = sum((gender_coxph_estimator - average_estimator_gender)^2)
+variance.gender = (1+1/M)*(A/(M-1)) + average_variance_gender
+
+# Calculate p-value 
+z = average_estimator_gender /sqrt(variance.gender)
+p_gender = 2*(1-pnorm(abs(z)))
+p_gender
+# 95% CI of the hazard ratio of variable gender 
+lower_bound_gender = exp(average_estimator_gender) - qnorm(0.975)*(exp(average_estimator_gender) * sqrt(variance.gender))
+upper_bound_gender = exp(average_estimator_gender) + qnorm(0.975)*(exp(average_estimator_gender) * sqrt(variance.gender))
+confidence_interval_gender = c(lower_bound_gender, upper_bound_gender)
+confidence_interval_gender
+
+
+# Average estimator of the age coefficients after generating M times 
+average_estimator_age = sum(age_coxph_estimator)/ M
+average_estimator_age
+# Hazard ratio of age 
+hr_age = exp(average_estimator_age)
+hr_age
+
+# Average variance of the age coefficient after generating M times 
+average_variance_age = sum(age_coxph_variance)/M
+
+# Calculate the variance of age 
+B = sum((age_coxph_estimator - average_estimator_age)^2)
+variance.age = (1+1/M)*(B/(M-1)) + average_variance_age 
+
+# Calculate p-value 
+z2 = average_estimator_age /sqrt(variance.age)
+p_age= 2*(1-pnorm(abs(z2)))
+p_age 
+
+# 95% CI of the hazard ratio of variable age 
+lower_bound_age = exp(average_estimator_age) - qnorm(0.975)*(exp(average_estimator_age) * sqrt(variance.age))
+upper_bound_age = exp(average_estimator_age) + qnorm(0.975)*(exp(average_estimator_age) * sqrt(variance.age))
+confidence_interval_age = c(lower_bound_age, upper_bound_age)
+confidence_interval_age
+
+
+# Average estimator of the age group coefficients after generating M times 
+average_estimator_age_group = sum(age_group_coxph_estimator)/ M
+average_estimator_age_group
+
+# Hazard ratio of age group 
+hr_age_group = exp(average_estimator_age_group)
+hr_age_group
+
+# Average variance of the age group coefficient after generating M times 
+average_variance_age_group = sum(age_group_coxph_variance)/M
+
+# Calculate the variance of age group
+C = sum((age_group_coxph_estimator - average_estimator_age_group)^2)
+variance.age_group = (1+1/M)*(C/(M-1)) + average_variance_age_group 
+
+# Calculate p-value
+z3 = average_estimator_age_group /sqrt(variance.age_group)
+p_age_group = 2*(1-pnorm(abs(z3)))
+p_age_group
+
+# 95% CI for the hazard ratio of variable age group
+lower_bound_age_group = exp(average_estimator_age_group) - qnorm(0.975)*(exp(average_estimator_age_group) * sqrt(variance.age_group))
+upper_bound_age_group = exp(average_estimator_age_group) + qnorm(0.975)*(exp(average_estimator_age_group) * sqrt(variance.age_group))
+confidence_interval_age_group = c(lower_bound_age_group, upper_bound_age_group)
+confidence_interval_age_group
+
+
+```
+
+### Find Breslow's estimator 
+```{r}
+# Initialized output 
+matrix1_gender = matrix(0,n,M)
+matrix1_age = matrix(0,n,M)
+matrix1_age_group = matrix(0,n,M)
+
+matrix_time_gender = matrix(NA,n,M)
+matrix_time_age = matrix(NA,n,M)
+matrix_time_age_group = matrix(NA,n,M)
+gender_jump_size = matrix(NA,n,M)
+age_jump_size = matrix(NA,n,M)
+age_group_jump_size = matrix(NA,n,M)
+matrix_grid_gender = matrix(NA,n,M)
+matrix_grid_age = matrix(NA,n,M)
+
+# Sequence of grid points 
+matrix_grid  =seq(0, max(matrix_incubation_time),0.5)
+
+matrix_grid_age_group = matrix(NA,n,M)
+matrix_grid_gender = matrix(NA,length(matrix_grid),M)
+matrix_grid_age = matrix(NA,length(matrix_grid),M)
+matrix_grid_age_group = matrix(NA,length(matrix_grid),M)
+
+#  Sort and find unique time having Delta equal to 1 of each imputed dataset 
+for ( j2 in 1:M){
+  len2 = ((sort(matrix_incubation_time[data$Delta ==1, j2])))
+  matrix_time_gender[1:length(len2), j2] = len2
+  matrix_time_age[1:length(len2), j2] = len2
+  matrix_time_age_group[1:length(len2), j2] = len2
+}
+
+# Calculate the funtion (exp(beta*covariance))
+for ( t1 in 1:M){
+  for ( l in 1:n){
+    matrix1_gender[l,t1] = (exp(gender_coxph_estimator[t1] * data$Gender[l]))
+    matrix1_age[l,t1] = (exp(age_coxph_estimator[t1] * data$age[l]))
+    matrix1_age_group[l,t1] = (exp(age_group_coxph_estimator[t1] * data$age_group[l]))
+  }
+}
+
+# Calculate jump size for each jump time 
+for ( t2 in 1:M){
+  len1 = (sort(matrix_incubation_time[data$Delta == 1, t2]))
+  sum_total_gender= 0 
+  sum_total_age = 0 
+  sum_total_age_group = 0 
+  for ( j1 in 1:length(len1)){
+    sum_total_gender= (1/(sum(matrix1_gender[matrix_incubation_time[,t2]>=len1[j1],t2], na.rm = TRUE))) + sum_total_gender
+    gender_jump_size[j1,t2] = sum_total_gender
+    sum_total_age = (1/(sum(matrix1_age[matrix_incubation_time[,t2]>=len1[j1],t2], na.rm = TRUE))) + sum_total_age
+    age_jump_size[j1,t2] = sum_total_age
+    sum_total_age_group = (1/(sum(matrix1_age_group[matrix_incubation_time[,t2]>=len1[j1],t2], na.rm = TRUE))) + sum_total_age_group
+    age_group_jump_size[j1,t2] = sum_total_age_group
+  }
+}
+
+matrix_time_gender = na.omit(matrix_time_gender)
+matrix_time_age = na.omit(matrix_time_age)
+matrix_time_age_group = na.omit(matrix_time_age_group)
+
+# Calculate the value of gender's grid points 
+for( m1 in 1:M) {
+  for (k1 in 1:length(matrix_grid)){
+    if (matrix_grid[k1] < matrix_time_gender[1,m1]) {
+    matrix_grid_gender[k1,m1] = 0
+    } else if (matrix_grid[k1] >= max(matrix_time_gender[,m1])){
+      matrix_grid_gender[k1,m1] = gender_jump_size[nrow(matrix_time_gender),m1]
+    } else {
+   index1 = 1
+    while((matrix_grid[k1] >=  matrix_time_gender[index1,m1])) {
+     index1 = index1+1
+    }
+    matrix_grid_gender[k1,m1] = gender_jump_size[index1-1,m1]
+    }
+  }
+}
+
+
+for( m1 in 1:M) {
+  for (k1 in 1:length(matrix_grid)){
+    if (matrix_grid[k1] < matrix_time_age[1,m1]) {
+    matrix_grid_age[k1,m1] = 0
+    } else if (matrix_grid[k1] >= max(matrix_time_age[,m1])){
+      matrix_grid_age[k1,m1] = gender_jump_size[nrow(matrix_time_age),m1]
+    } else {
+   index1 = 1
+    while((matrix_grid[k1] >= matrix_time_age[index1,m1])) {
+     index1 = index1+1
+    }
+    matrix_grid_age[k1,m1] = age_jump_size[index1-1,m1]
+    }
+  }
+}
+
+for( m1 in 1:M) {
+  for (k1 in 1:length(matrix_grid)){
+    if (matrix_grid[k1] < matrix_time_age_group[1,m1]) {
+    matrix_grid_age_group[k1,m1] = 0
+    } else if (matrix_grid[k1] >= max(matrix_time_age_group[,m1])){
+      matrix_grid_age_group[k1,m1] = gender_jump_size[nrow(matrix_time_age_group),m1]
+    } else {
+   index1 = 1
+    while((matrix_grid[k1] >= matrix_time_age_group[index1,m1])) {
+     index1 = index1+1
+    }
+    matrix_grid_age_group[k1,m1] = age_group_jump_size[index1-1,m1]
+    }
+  }
+}
+```
+
+### Plot survival probability of gender 
+```{r}
+# Calculate the average of grid points 
+average_breslow_gender = rowSums(matrix_grid_gender)/M
+# Plot 
+survival_prob_female = exp(-average_breslow_gender)
+survival_prob_male = exp(-average_breslow_gender* exp(average_estimator_gender))
+plot(matrix_grid, survival_prob_female, xlab = "Time (days)", ylab = " Survival probability", type = "s" , main = "Estimated survival function for incubation period based on gender", col = "red")
+lines(matrix_grid, survival_prob_male, type = "s", lty = 1, col = "blue")
+legend("topright", legend = c("Female", "Male"), lty = 1, col = c("red", "blue"))
+
+```
+
+### Plot survival probability of age group 
+
+```{r}
+# Calculate the average of grid points 
+average_breslow_age_group = rowSums(matrix_grid_age_group)/M
+# Plot 
+survival_prob_young = exp(-average_breslow_age_group)
+survival_prob_old = exp(-average_breslow_age_group* exp(average_estimator_age_group))
+plot(matrix_grid, survival_prob_young, xlab = "Time (days)", ylab = "Survival Probability", type = "s" , main = "Estimated survival function for incubation period based on age (old >46)", col = "red")
+lines(matrix_grid, survival_prob_old, type = "s", lty = 1, col = "blue")
+legend("topright", legend = c("Young", "Old"), lty = 1, col = c("red", "blue"))
+
+```
+

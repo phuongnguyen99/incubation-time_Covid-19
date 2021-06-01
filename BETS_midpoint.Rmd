@@ -1,0 +1,156 @@
+---
+title: "Analysis of Midpoint Imputations (BETS data)"
+author: "Phuong Nguyen"
+date: "9/20/2020"
+output: html_document
+---
+
+### Data description 
+```{r}
+library(dplyr)
+data = read.csv("wuhan_exported_clean_update.csv", header =T)
+data$midpoint = as.integer((data$E+data$B)/2)
+incubation_time = data$S - data$midpoint
+data$incubation_time = as.integer(incubation_time)
+data = data[!(data$incubation_time <=0),]
+median_age = median(data$Age2, na.rm = T)
+data = data %>% mutate(age_group = ifelse(Age2 > median_age,"old", "young"))
+data$Gender = ifelse(data$Gender == 'M', 1, 0) # Male is encoded as 1 while Female is 0 
+data$age_group =  ifelse(data$age_group == 'old', 1, 0) # Old is encoded as 1 while young is 0 
+dim(data)
+```
+
+
+##### This dataset is collected with key epidemiological information for 463 confirmed COVID19 cases across 14 locations in and outside mainland China. The following is a summary about the dataset:
+##### Location : Where the patients were diagnosed
+##### B: Begin stying in Wuhan (days since 12/1/2019)
+##### E: End staying in Wuhan 
+##### S: Symtom onset or censoring time
+##### Delta : Indicator variable. 1 if S is symptom onset ontime and 0 if S is censoring time 
+##### Gender: Patient's gender 
+##### Age : Patient age at diagnosis; 18 values were recorded by decades (eg., 30s); one missing value 
+##### Age1: remove "s" from the decades in Age (e.g., 30s to 30)
+##### Age2: approximate the decades by midpoint in Age (e.g., 30s to 35)
+##### midpoint : Midpoint time between begin staying and end stuyding in Wuhan 
+##### incubtaion_time : Difference time between symtom onet or cencoring time and the midpoint in Wuahan.Negative incubation time or incubation time equal to 0 is removed
+
+#### In summary, by doing some additional computations, there are 459 observations left with 11 variables which meet the requirements for our study.
+
+### Frequency table 
+```{r}
+gender = table(data$Gender)
+gender 
+location = table(data$Location)
+location
+quantile(data$Age2, na.rm = T)
+quantile(data$incubation_time)
+```
+
+
+### Histogram 
+```{r}
+hist(data$Age2, xlab = "Age", main = "Age of patients infected COVID19", ylim = c(0,120))
+hist(data$incubation_time, xlab = "Time in days", main = "Incubation time of patients infected COVID19") 
+```
+
+### Cox model 
+#### A Cox regression of incubation time on the covariate of gender
+```{r}
+library(survival)
+library(survminer)
+gender.cox = coxph(Surv(incubation_time, Delta) ~ Gender, data = data, ties = "exact")
+summary(gender.cox)
+```
+
+
+
+##### In the Cox model, we calculate the hazard ratio (the incubation time) for the second group (gender M) relative to the first group (gender F) with the gender is covariate 
+##### The regression coeffcients for gender male = 0.01898 indicate that male would have higher risk (shorter incubation time) than female
+##### Hazard ratios(HR): The exponential coeffcient, known as the hazard ratio,exp(coef) = 1.019, indicates that male would increase the hazard by a factor of 1.019 or 101.9%
+##### The p-value for gender is 0.85 with a 95% confidence interval of 0.8367  to 1.241. Because the confidence interval for HR includes 1, the result indicates that gender is not associated significantly with incubation time.
+##### Global statistical significance of the model. Finally, the output gives p-values for three alternative tests for overall significance of the model: The likelihood-ratio test, Wald test, and score logrank statistics. These three methods are asymptotically equivalent.
+
+#### A Cox regression of incubation time on the covariate of age
+```{r}
+age.cox = coxph(Surv(incubation_time, Delta) ~ Age2, data = data, ties = "exact")
+summary(age.cox)
+
+```
+
+##### The regression coeffcients for age = 0.009314 indicate that people with an additional year of age would have higher risk
+##### Hazard ratios(HR): The exponential coeffcient, known as the hazard ratio,exp(coef) = 1.009, indicates that people with an additional year of age would increase the hazard by a factor of 1.009 or 100.9%
+##### The p-value for age is 0.00336 with a 95% confidence interval of 1.003 to 1.1.016. Because the confidence interval for HR does not include 1, the result indicates that age makes a contribution to the difference in HR. In other words, age is associated significantly with the incubation time
+##### Global statistical significance of the model. Finally, the output gives p-values for three alternative tests for overall significance of the model: The likelihood-ratio test, Wald test, and score logrank statistics. These three methods are asymptotically equivalent
+
+#### A Cox regression of incubation time on the covariate of age group
+```{r}
+age_group.cox = coxph(Surv(incubation_time, Delta) ~ age_group, data = data, ties = "exact")
+summary(age_group.cox)
+```
+
+
+##### The regression coeffcients for age = 0.2706 indicate that old people would have a higher risk (shorter incubation time) when compared with young people 
+##### Hazard ratios(HR): The exponential coeffcient, known as the hazard ratio,exp(coef) = 1.311, indicates that old people will increase the hazard by a factor of 1.311 or 131.1%
+##### The p-value for age group is 0.0075 with a 95% confidence interval of 1.075 to 1.598. Because the confidence interval for HR does not include 1, the result indicates that age group makes a contribution to the difference in HR. In other words, age group is associated with the incubation time 
+##### Global statistical significance of the model. Finally, the output gives p-values for three alternative tests for overall significance of the model: The likelihood-ratio test, Wald test, and score logrank statistics. These three methods are asymptotically equivalent
+
+### Kaplan- Meier estimation 
+#### Survival probability by gender
+```{r}
+gender.fit = survfit(Surv(incubation_time, Delta) ~ Gender, data = data)
+gender.fit
+summary(gender.fit)
+```
+
+#### Graph of survival probability
+```{r}
+ggsurvplot(gender.fit, data = data, # survfit object with calculated statistics.
+   pval = TRUE,             # show p-value of log-rank test.
+   ggtheme = theme_light(), # customize plot and risk table with a theme.
+   risk.table = "abs_pct",  # absolute number and percentage at risk.
+   risk.table.y.text.col = T,# colour risk table text annotations.
+   risk.table.y.text = FALSE,# show bars instead of names in text annotations in legend of risk table.
+   ncensor.plot = TRUE,      # plot the number of censored subjects at time t
+   surv.median.line = "hv",  # add the median survival pointer.
+   palette = c("red", "blue")
+)
+```
+
+```{r}
+ggsurvplot(gender.fit, legend.labs = c("Female", "Male"), xlab = "Time (days)", ylab = " Survival probability",main = "Distribution of incubation time based on gender",data = data)
+
+```
+
+
+##### The horizontal axis (x-axis) represents time in days, and the vertical axis (y-axis) shows the probability of surviving or the proportion of people surviving. The lines represent survival curves of the two groups (female vs male). The vertical tick mark on the curves means that patients were censored at this time. The median survival is approximately 27 days for female while 26 days for male. This suggests a good survival for female than male.
+
+#### Survival probability by age group
+```{r}
+age_group.fit = survfit(Surv(incubation_time, Delta) ~ age_group, data = data)
+age_group.fit
+summary(age_group.fit)
+```
+
+### Graph of survival probability 
+```{r}
+ggsurvplot( age_group.fit, data = data,  # survfit object with calculated statistics.
+   pval = FALSE,                          # show p-value of log-rank test.
+   ggtheme = theme_light(),              # customize plot and risk table with a theme.
+   risk.table = "abs_pct",               # absolute number and percentage at risk.
+   risk.table.y.text.col = T,            # colour risk table text annotations.
+   risk.table.y.text = FALSE,            # show bars instead of names in text annotations  in legend of risk table.
+   ncensor.plot = TRUE,                  # plot the number of censored subjects at time t
+   surv.median.line = "hv",              # add the median survival pointer.
+   palette = c("#E7B800", "#2E9FDF")     # custom color palettes.
+)
+```
+
+```{r}
+ggsurvplot(age_group.fit, legend.labs = c("Young", "Old"), data = data, xlab = "Time (days)",ylab = " Survival probability")
+```
+
+```{r}
+summary(age_group.fit)$table
+```
+##### The horizontal axis (x-axis) represents time in days, and the vertical axis (y-axis) shows the probability of surviving or the proportion of people surviving. The lines represent survival curves of the two groups (young vs old).f In addition, the median survival is approximately 27 days for age group young while the median survival is 26 days for age group old. Besides, p-value in this case is 0.0074, which indicates that age group is associated with the survival probability as well.
+

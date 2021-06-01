@@ -1,0 +1,140 @@
+---
+title: "Analysis of Interval censoring (BETS data)"
+author: "Phuong Nguyen"
+date: "2/24/2021"
+output: html_document
+---
+### Data descrpition 
+
+```{r}
+library(dplyr)
+data = read.csv("wuhan_exported_clean_update.csv", header =T)
+data = data[!is.na(data$Age2),] # Remove observation which Age2 is NA
+data$l = data$S - data$E
+data$u = data$S - data$B
+data = data[!(data$l == data$u),]
+data$l = replace(data$l, which(data$l <0), 0 )
+data$u = replace(data$u, which(data$Delta == 0),Inf)
+data = data %>% mutate(age_group = ifelse(Age2 >= median(data$Age2),"old", "young"))
+data$Gender = ifelse(data$Gender == 'M', 1, 0) # Male is encoded as 1 while Female is 0 
+data$age_group =  ifelse(data$age_group == 'old', 1, 0) # Old is encoded as 1 while young is 0 
+data_IntCens = data.frame(Location = data$Location, B = data$B, E = data$E, S = data$S, Delta = data$Delta, 
+                 Gender = data$Gender, Age = data$Age2, Age_group = data$age_group, l = data$l, u = data$u )
+data_IntCens$u = replace(data$u, which(data$Delta == 0),"inf")
+write.table(data_IntCens, file = "BETS_interval_censoring.txt", row.names = F, quote = F)
+dim(data)
+```
+
+##### This dataset is collected with key epidemiological information for 463 confirmed COVID19 cases across 14 locations in and outside mainland China. The following is a summary about the dataset:
+##### Location : Where the patients were diagnosed
+##### B: Begin stying in Wuhan (days since 12/1/2019)
+##### E: End staying in Wuhan 
+##### S: Symtom onset or censoring time
+##### Delta : Indicator variable. 1 if S is symptom onset ontime and 0 if S is censoring time 
+##### Gender: Patient's gender 
+##### Age : Patient age at diagnosis; 18 values were recorded by decades (eg., 30s); one missing value 
+##### Age1: remove "s" from the decades in Age (e.g., 30s to 30)
+##### Age2: approximate the decades by midpoint in Age (e.g., 30s to 35)
+##### l: The difference between patient's symptom onset or censoring time (S) and time of beginning staying in Wuhan (B) or lower interval time. Negative lower time interval is romoved from the dataset
+##### u: The difference between patient's symptom onset(S) and time of ending staying in Wuhan (E) or upper interval time. For censoring time, the upper interval time is replace by Inf 
+##### age_group: Age group is divided between young and old based on the median age 
+
+#### In summary, by doing some additional computations, there are 462 observations left with 12 variables which meets the requirements for our study.
+
+
+### Frequency table 
+```{r}
+gender = table(data$Gender)
+gender 
+location = table(data$Location)
+location
+quantile(data$Age2, na.rm = T)
+```
+
+### Histogram 
+```{r}
+hist(data$Age2, xlab = "Age", main = "Age of patients infected COVID19", ylim = c(0,120))
+```
+
+
+### Semi-parametric model with interval-censored on the covariate of gender (using icenReg package)
+
+```{r}
+# icenReg package
+library(icenReg)
+set.seed(100)
+gender.fit = ic_sp(Surv(l,u, type = "interval2") ~ Gender,bs_samples = 800, data = data, model = "ph")
+summary(gender.fit)
+```
+
+### Semi-parametric model with interval-censored on the covariate of age (using icenReg package)
+```{r}
+# icenReg package
+set.seed(100)
+age.fit = ic_sp(Surv(l,u, type = "interval2") ~ Age2,bs_samples = 500, data = data, model = "ph")
+summary(age.fit)
+```
+
+### Semi-parametric model with interval-censored on the covariate of age group  (using icenReg package)
+```{r}
+set.seed(100)
+age_group.fit = ic_sp(Surv(l,u, type = "interval2") ~ age_group, bs_samples = 800, data = data)
+summary(age_group.fit)
+```
+
+
+### Plot for gender 
+
+```{r}
+chf_gender = read.table("Gender_output.txt", header = T, sep = "")
+estimate_coeff  = -0.025793474453039443
+survival_prob_female = exp(-chf_gender$Estimate)
+survival_prob_male = exp(-chf_gender$Estimate * exp(estimate_coeff))
+plot(chf_gender$Time,survival_prob_female,xlab = "Time (days)",ylab = "Survival probability",type = "s" , main = "Estimated survival function for incubation period based on gender ", col = "red")
+lines(chf_gender$Time,survival_prob_male, type = "s", lty = 1, col = "blue")
+legend("topright", legend = c("Female", "Male"), lty = 1, col = c("red", "blue"))
+```
+
+### Plot for age group 
+
+```{r}
+chf_age = read.table("Age_group_output.txt", header = T, sep = "")
+estimate_coeff_age = 0.21524481356123062
+survival_prob_young = exp(-chf_age$Estimate)
+survival_prob_old = exp(-chf_age$Estimate * exp(estimate_coeff_age))
+plot(chf_age$Time,survival_prob_young, xlab = "Time (days)",ylab = "Survival probability",type = "s" , main = "Estimated survival function for incubation period based on age (old >46) ", col = "red")
+lines(chf_age$Time,survival_prob_old, type = "s", lty = 1, col = "blue")
+legend("topright", legend = c("Young", "Old"), lty = 1, col = c("red", "blue"))
+```
+
+
+```{r}
+# 95% CI for the hazard ratio of variable age group
+average_estimator_age_group = 0.21524481356123062
+variance.age_group = (0.19840294138104375)^2
+lower_bound_age_group = exp(average_estimator_age_group) - qnorm(0.975)*(exp(average_estimator_age_group) * sqrt(variance.age_group))
+upper_bound_age_group = exp(average_estimator_age_group) + qnorm(0.975)*(exp(average_estimator_age_group) * sqrt(variance.age_group))
+confidence_interval_age_group = c(lower_bound_age_group, upper_bound_age_group)
+confidence_interval_age_group
+```
+
+```{r}
+# 95% CI of the hazard ratio of variable age 
+average_estimator_age = 0.0084671908662986954
+variance.age= (0.0064771292203568472)^2
+lower_bound_age = exp(average_estimator_age) - qnorm(0.975)*(exp(average_estimator_age) * sqrt(variance.age))
+upper_bound_age = exp(average_estimator_age) + qnorm(0.975)*(exp(average_estimator_age) * sqrt(variance.age))
+confidence_interval_age = c(lower_bound_age, upper_bound_age)
+confidence_interval_age
+```
+
+```{r}
+# 95% CI of the hazard ratio of variable gender 
+average_estimator_gender = -0.025793474453039443
+variance.gender = (0.20438244424944083)^2
+lower_bound_gender = exp(average_estimator_gender) - qnorm(0.975)*(exp(average_estimator_gender) * sqrt(variance.gender))
+upper_bound_gender = exp(average_estimator_gender) + qnorm(0.975)*(exp(average_estimator_gender) * sqrt(variance.gender))
+confidence_interval_gender = c(lower_bound_gender, upper_bound_gender)
+confidence_interval_gender
+```
+
